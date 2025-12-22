@@ -1,7 +1,8 @@
+// src/pages/Feedback.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { getPublicIP } from "../services/networkService";
-import { getEmployees } from "../services/storageService";
 import { logFeedback } from "../services/attendanceService";
+import { EMPLOYEE_DIRECTORY, EMPLOYEE_MAP } from "../data/employeeDirectory";
 
 type Scope = "GENERAL" | "EMPLOYEE";
 
@@ -14,20 +15,17 @@ const FeedbackPage: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState<string>("");
 
-  const employees = useMemo(() => {
-    // Lưu ý quan trọng: máy khách quét QR trên điện thoại của họ sẽ KHÔNG có danh sách nhân viên nếu bạn lưu ở localStorage.
-    // Vì vậy: vẫn cho chọn "Đánh giá chung" là chính; "Theo nhân viên" là tùy chọn và danh sách này sẽ trống nếu máy đó chưa có dữ liệu.
-    // Nếu muốn luôn có danh sách: bạn nên hardcode 20 nhân viên trong 1 file src/data/employees.ts.
-    return getEmployees?.() || [];
-  }, []);
+  // Danh sách cố định trong code để ai quét QR cũng thấy
+  const employees = useMemo(() => EMPLOYEE_DIRECTORY, []);
 
+  // Nếu QR có emp=KHCN-0001 thì preselect
   useEffect(() => {
-    // hỗ trợ preselect emp từ QR nếu bạn muốn (không bắt buộc)
     const params = new URLSearchParams(window.location.search);
-    const emp = params.get("emp");
+    const emp = params.get("emp"); // KHCN-0001...
     if (emp) {
       setScope("EMPLOYEE");
       setEmployeeId(emp);
+      setEmployeeName(EMPLOYEE_MAP[emp] || "");
     }
   }, []);
 
@@ -42,10 +40,12 @@ const FeedbackPage: React.FC = () => {
 
   const handleSubmit = async () => {
     setDone("");
+
     if (!rating || rating < 1 || rating > 5) {
       setDone("Vui lòng chọn mức đánh giá (1–5).");
       return;
     }
+
     if (scope === "EMPLOYEE" && !employeeId) {
       setDone("Bạn đang chọn đánh giá theo nhân viên, vui lòng chọn nhân viên.");
       return;
@@ -55,11 +55,9 @@ const FeedbackPage: React.FC = () => {
     try {
       const ip = await getPublicIP().catch(() => "");
 
-      // Nếu employeeName chưa có (do list rỗng), vẫn cho gửi theo employeeId
       const empName =
         employeeName ||
-        employees.find((e: any) => e.id === employeeId)?.name ||
-        "";
+        (employeeId ? EMPLOYEE_MAP[employeeId] || "" : "");
 
       const ok = await logFeedback({
         rating,
@@ -80,6 +78,10 @@ const FeedbackPage: React.FC = () => {
       } else {
         setDone("❌ Không gửi được đánh giá. Vui lòng thử lại.");
       }
+    } catch (e) {
+      setDone("❌ Có lỗi khi gửi đánh giá. Vui lòng thử lại.");
+      // eslint-disable-next-line no-console
+      console.error(e);
     } finally {
       setSubmitting(false);
     }
@@ -96,12 +98,16 @@ const FeedbackPage: React.FC = () => {
 
       <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 space-y-4">
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">Loại đánh giá</label>
-          <div className="flex gap-3">
+          <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">
+            Loại đánh giá
+          </label>
+          <div className="flex flex-wrap gap-3">
             <button
               onClick={() => setScope("GENERAL")}
               className={`px-4 py-2 rounded-lg border text-sm font-medium ${
-                scope === "GENERAL" ? "border-brand-600 text-brand-600 bg-brand-50" : "border-gray-200 text-gray-600"
+                scope === "GENERAL"
+                  ? "border-brand-600 text-brand-600 bg-brand-50"
+                  : "border-gray-200 text-gray-600"
               }`}
             >
               Đánh giá chung
@@ -109,7 +115,9 @@ const FeedbackPage: React.FC = () => {
             <button
               onClick={() => setScope("EMPLOYEE")}
               className={`px-4 py-2 rounded-lg border text-sm font-medium ${
-                scope === "EMPLOYEE" ? "border-brand-600 text-brand-600 bg-brand-50" : "border-gray-200 text-gray-600"
+                scope === "EMPLOYEE"
+                  ? "border-brand-600 text-brand-600 bg-brand-50"
+                  : "border-gray-200 text-gray-600"
               }`}
             >
               Theo nhân viên (tùy chọn)
@@ -119,45 +127,42 @@ const FeedbackPage: React.FC = () => {
 
         {scope === "EMPLOYEE" && (
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">Chọn nhân viên</label>
+            <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">
+              Chọn nhân viên
+            </label>
 
-            {employees.length === 0 ? (
-              <div className="text-sm text-orange-600 bg-orange-50 border border-orange-100 rounded-lg p-3">
-                Danh sách nhân viên chưa có trên thiết bị này. Bạn vẫn có thể chuyển sang <b>Đánh giá chung</b>.
-                <br />
-                (Nếu muốn QR ai quét cũng thấy danh sách, cần nhúng danh sách nhân viên cố định vào code.)
-              </div>
-            ) : (
-              <select
-                value={employeeId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setEmployeeId(id);
-                  const emp = employees.find((x: any) => x.id === id);
-                  setEmployeeName(emp?.name || "");
-                }}
-                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
-              >
-                <option value="">-- Chọn nhân viên --</option>
-                {employees.map((emp: any) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.name} - {emp.position}
-                  </option>
-                ))}
-              </select>
-            )}
+            <select
+              value={employeeId}
+              onChange={(e) => {
+                const id = e.target.value;
+                setEmployeeId(id);
+                setEmployeeName(EMPLOYEE_MAP[id] || "");
+              }}
+              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+            >
+              <option value="">-- Chọn nhân viên --</option>
+              {employees.map((emp) => (
+                <option key={emp.employeeId} value={emp.employeeId}>
+                  {emp.employeeName} ({emp.employeeId})
+                </option>
+              ))}
+            </select>
           </div>
         )}
 
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">Mức hài lòng</label>
+          <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">
+            Mức hài lòng
+          </label>
           <div className="grid grid-cols-5 gap-2">
             {[1, 2, 3, 4, 5].map((v) => (
               <button
                 key={v}
                 onClick={() => selectRating(v)}
                 className={`py-3 rounded-lg border text-sm font-bold ${
-                  rating === v ? "border-brand-600 bg-brand-50 text-brand-700" : "border-gray-200 text-gray-600"
+                  rating === v
+                    ? "border-brand-600 bg-brand-50 text-brand-700"
+                    : "border-gray-200 text-gray-600"
                 }`}
               >
                 {v}
@@ -170,7 +175,9 @@ const FeedbackPage: React.FC = () => {
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">Góp ý (tùy chọn)</label>
+          <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">
+            Góp ý (tùy chọn)
+          </label>
           <textarea
             value={comment}
             onChange={(e) => setComment(e.target.value)}
