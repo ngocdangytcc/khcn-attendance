@@ -1,115 +1,198 @@
-import React, { useMemo, useState } from 'react';
-import { submitFeedback } from '../services/attendanceService';
-import { getPublicIP } from '../services/networkService';
+import React, { useEffect, useMemo, useState } from "react";
+import { getPublicIP } from "../services/networkService";
+import { getEmployees } from "../services/storageService";
+import { logFeedback } from "../services/attendanceService";
 
-const faces = [
-  { rating: 5, label: 'Rất hài lòng', emoji: '😄' },
-  { rating: 4, label: 'Hài lòng', emoji: '🙂' },
-  { rating: 3, label: 'Bình thường', emoji: '😐' },
-  { rating: 2, label: 'Không hài lòng', emoji: '🙁' },
-  { rating: 1, label: 'Rất không hài lòng', emoji: '😡' },
-];
+type Scope = "GENERAL" | "EMPLOYEE";
 
 const FeedbackPage: React.FC = () => {
-  const qs = useMemo(() => new URLSearchParams(window.location.search), []);
-  const employeeId = qs.get('emp') || '';
-  const [rating, setRating] = useState<number | null>(null);
-  const [comment, setComment] = useState('');
-  const [submitted, setSubmitted] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [scope, setScope] = useState<Scope>("GENERAL");
+  const [employeeId, setEmployeeId] = useState<string>("");
+  const [employeeName, setEmployeeName] = useState<string>("");
+  const [rating, setRating] = useState<number>(0); // 1-5
+  const [comment, setComment] = useState<string>("");
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState<string>("");
+
+  const employees = useMemo(() => {
+    // Lưu ý quan trọng: máy khách quét QR trên điện thoại của họ sẽ KHÔNG có danh sách nhân viên nếu bạn lưu ở localStorage.
+    // Vì vậy: vẫn cho chọn "Đánh giá chung" là chính; "Theo nhân viên" là tùy chọn và danh sách này sẽ trống nếu máy đó chưa có dữ liệu.
+    // Nếu muốn luôn có danh sách: bạn nên hardcode 20 nhân viên trong 1 file src/data/employees.ts.
+    return getEmployees?.() || [];
+  }, []);
+
+  useEffect(() => {
+    // hỗ trợ preselect emp từ QR nếu bạn muốn (không bắt buộc)
+    const params = new URLSearchParams(window.location.search);
+    const emp = params.get("emp");
+    if (emp) {
+      setScope("EMPLOYEE");
+      setEmployeeId(emp);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (scope === "GENERAL") {
+      setEmployeeId("");
+      setEmployeeName("");
+    }
+  }, [scope]);
+
+  const selectRating = (v: number) => setRating(v);
 
   const handleSubmit = async () => {
-    setErr(null);
-
-    if (!employeeId) {
-      setErr('Thiếu mã nhân viên (emp). Vui lòng quét lại QR.');
+    setDone("");
+    if (!rating || rating < 1 || rating > 5) {
+      setDone("Vui lòng chọn mức đánh giá (1–5).");
       return;
     }
-    if (!rating) {
-      setErr('Vui lòng chọn một mức đánh giá.');
+    if (scope === "EMPLOYEE" && !employeeId) {
+      setDone("Bạn đang chọn đánh giá theo nhân viên, vui lòng chọn nhân viên.");
       return;
     }
 
-    setBusy(true);
+    setSubmitting(true);
     try {
-      let ip = '';
-      try { ip = await getPublicIP(); } catch {}
+      const ip = await getPublicIP().catch(() => "");
 
-      await submitFeedback({
-        employeeId,
+      // Nếu employeeName chưa có (do list rỗng), vẫn cho gửi theo employeeId
+      const empName =
+        employeeName ||
+        employees.find((e: any) => e.id === employeeId)?.name ||
+        "";
+
+      const ok = await logFeedback({
         rating,
-        comment: comment.trim(),
+        scope,
+        employeeId: scope === "EMPLOYEE" ? employeeId : "",
+        employeeName: scope === "EMPLOYEE" ? empName : "",
+        comment: comment || "",
         ip,
         userAgent: navigator.userAgent,
+        source: "QR",
       });
 
-      setSubmitted(true);
-    } catch (e: any) {
-      setErr(e?.message || 'Không gửi được đánh giá. Vui lòng thử lại.');
+      if (ok) {
+        setDone("✅ Cảm ơn bạn! Đánh giá đã được ghi nhận.");
+        setRating(0);
+        setComment("");
+        setScope("GENERAL");
+      } else {
+        setDone("❌ Không gửi được đánh giá. Vui lòng thử lại.");
+      }
     } finally {
-      setBusy(false);
+      setSubmitting(false);
     }
   };
 
-  if (submitted) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 max-w-md w-full text-center space-y-3">
-          <div className="text-5xl">🙏</div>
-          <h1 className="text-xl font-bold text-gray-900">Cảm ơn anh/chị!</h1>
-          <p className="text-sm text-gray-600">
-            Ý kiến của anh/chị giúp Phòng KHCN cải thiện chất lượng phục vụ.
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+        <h2 className="text-lg font-bold text-gray-800">Đánh giá chất lượng phục vụ</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Đánh giá ẩn danh. Bạn có thể chọn <b>đánh giá chung</b> hoặc <b>theo nhân viên</b> (tùy chọn).
+        </p>
+      </div>
+
+      <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 space-y-4">
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">Loại đánh giá</label>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setScope("GENERAL")}
+              className={`px-4 py-2 rounded-lg border text-sm font-medium ${
+                scope === "GENERAL" ? "border-brand-600 text-brand-600 bg-brand-50" : "border-gray-200 text-gray-600"
+              }`}
+            >
+              Đánh giá chung
+            </button>
+            <button
+              onClick={() => setScope("EMPLOYEE")}
+              className={`px-4 py-2 rounded-lg border text-sm font-medium ${
+                scope === "EMPLOYEE" ? "border-brand-600 text-brand-600 bg-brand-50" : "border-gray-200 text-gray-600"
+              }`}
+            >
+              Theo nhân viên (tùy chọn)
+            </button>
+          </div>
+        </div>
+
+        {scope === "EMPLOYEE" && (
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">Chọn nhân viên</label>
+
+            {employees.length === 0 ? (
+              <div className="text-sm text-orange-600 bg-orange-50 border border-orange-100 rounded-lg p-3">
+                Danh sách nhân viên chưa có trên thiết bị này. Bạn vẫn có thể chuyển sang <b>Đánh giá chung</b>.
+                <br />
+                (Nếu muốn QR ai quét cũng thấy danh sách, cần nhúng danh sách nhân viên cố định vào code.)
+              </div>
+            ) : (
+              <select
+                value={employeeId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setEmployeeId(id);
+                  const emp = employees.find((x: any) => x.id === id);
+                  setEmployeeName(emp?.name || "");
+                }}
+                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+              >
+                <option value="">-- Chọn nhân viên --</option>
+                {employees.map((emp: any) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.name} - {emp.position}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">Mức hài lòng</label>
+          <div className="grid grid-cols-5 gap-2">
+            {[1, 2, 3, 4, 5].map((v) => (
+              <button
+                key={v}
+                onClick={() => selectRating(v)}
+                className={`py-3 rounded-lg border text-sm font-bold ${
+                  rating === v ? "border-brand-600 bg-brand-50 text-brand-700" : "border-gray-200 text-gray-600"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-gray-400 mt-2">
+            1 = không hài lòng, 5 = rất hài lòng
           </p>
         </div>
-      </div>
-    );
-  }
 
-  return (
-    <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 max-w-md w-full space-y-4">
-        <h1 className="text-lg font-bold text-gray-900">Đánh giá phục vụ</h1>
-        <p className="text-sm text-gray-600">
-          Mã nhân viên: <span className="font-semibold">{employeeId || '(không có)'}</span>
-        </p>
-
-        <div className="grid grid-cols-5 gap-2">
-          {faces.map((f) => (
-            <button
-              key={f.rating}
-              onClick={() => setRating(f.rating)}
-              className={`p-3 rounded-xl border text-center active:scale-95 transition ${
-                rating === f.rating ? 'border-brand-600 bg-brand-50' : 'border-gray-200 bg-white'
-              }`}
-              title={f.label}
-            >
-              <div className="text-2xl">{f.emoji}</div>
-              <div className="text-[10px] mt-1 text-gray-600">{f.rating}</div>
-            </button>
-          ))}
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-2 uppercase">Góp ý (tùy chọn)</label>
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            rows={4}
+            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+            placeholder="Ví dụ: thái độ phục vụ, thời gian xử lý, hướng dẫn thủ tục..."
+          />
         </div>
-
-        <textarea
-          value={comment}
-          onChange={(e) => setComment(e.target.value)}
-          placeholder="Góp ý thêm (không bắt buộc)…"
-          className="w-full min-h-[90px] p-3 rounded-xl border border-gray-200 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-500"
-        />
-
-        {err && <div className="text-sm text-red-600">{err}</div>}
 
         <button
           onClick={handleSubmit}
-          disabled={busy}
-          className="w-full bg-brand-600 text-white rounded-xl py-3 font-semibold disabled:opacity-50"
+          disabled={submitting}
+          className="w-full py-3 rounded-xl bg-brand-600 text-white font-semibold disabled:opacity-50"
         >
-          {busy ? 'Đang gửi...' : 'Gửi đánh giá'}
+          {submitting ? "Đang gửi..." : "Gửi đánh giá"}
         </button>
 
-        <p className="text-[11px] text-gray-500">
-          * Không yêu cầu đăng nhập. Dữ liệu chỉ phục vụ cải tiến chất lượng dịch vụ nội bộ.
-        </p>
+        {done && (
+          <div className="text-sm mt-2 text-gray-700 bg-gray-50 border border-gray-100 rounded-lg p-3">
+            {done}
+          </div>
+        )}
       </div>
     </div>
   );
