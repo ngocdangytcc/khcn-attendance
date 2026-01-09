@@ -24,6 +24,9 @@ function formatHanoi(ts: any) {
 const AdminPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [authenticated, setAuthenticated] = useState(false);
+  
+  // Config state
+  const [enableFace, setEnableFace] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [attendance, setAttendance] = useState<AttendanceLog[]>([]);
@@ -51,6 +54,9 @@ const AdminPage: React.FC = () => {
     if (password === ADMIN_PASSWORD) {
       setAuthenticated(true);
       setError(null);
+      // Load config on login success
+      const current = localStorage.getItem('ENABLE_FACE_ATTENDANCE') === 'true';
+      setEnableFace(current);
     } else {
       setError('Mật khẩu admin không đúng.');
     }
@@ -100,6 +106,25 @@ const AdminPage: React.FC = () => {
       <button onClick={loadData} style={{ marginBottom: 16, padding: '10px 16px' }}>
         Tải dữ liệu
       </button>
+
+      <div style={{ marginBottom: 20, padding: 12, border: '1px solid #ccc', borderRadius: 8, background: '#fafafa' }}>
+        <h3>Cấu hình hệ thống (trên thiết bị này)</h3>
+        <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={enableFace}
+            onChange={(e) => {
+              const newVal = e.target.checked;
+              setEnableFace(newVal);
+              localStorage.setItem('ENABLE_FACE_ATTENDANCE', String(newVal));
+            }}
+          />
+          <strong>Bật tính năng Chấm công Khuôn mặt</strong>
+        </label>
+        <p style={{ margin: '4px 0 0 24px', fontSize: '0.85em', color: '#666' }}>
+          Khi bật, nhân viên sẽ cần chụp ảnh để xác thực (Wifi vẫn được kiểm tra). Khi tắt, chỉ check Wifi.
+        </p>
+      </div>
 
       {loading && <p>Đang tải dữ liệu...</p>}
       {error && <p style={{ color: 'red' }}>{error}</p>}

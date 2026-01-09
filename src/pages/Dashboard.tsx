@@ -3,6 +3,8 @@ import { Employee, AttendanceRecord } from '../types';
 import { getEmployees, saveAttendanceLog } from '../services/storageService';
 import { getPublicIP, getWifiConfigs, isWifiConnection } from '../services/networkService';
 import { logAttendance } from '../services/attendanceService';
+import Camera from '../components/Camera';
+import { verifyFace } from '../services/geminiService';
 
 interface DashboardProps {
   onNotification: (msg: string, type: 'success' | 'error') => void;
@@ -14,6 +16,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onNotification }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [time, setTime] = useState(new Date());
+
+  // Face Auth State
+  const [showCamera, setShowCamera] = useState(false);
+  const [pendingType, setPendingType] = useState<'CHECK_IN' | 'CHECK_OUT' | null>(null);
+  const [pendingIP, setPendingIP] = useState('');
 
   useEffect(() => {
     setEmployees(getEmployees());
@@ -31,15 +38,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onNotification }) => {
     setStatusMessage('Đang kiểm tra kết nối Wifi/IP...');
 
     try {
-      // Cảnh báo nếu không phải wifi (không chặn ngay, IP mới là điều kiện chính)
+      // 1. Wifi Logic
       if (!isWifiConnection()) {
-        console.warn('Có thể đang dùng 4G/5G, sẽ kiểm tra IP để quyết định.');
+        console.warn('Có thể đang dùng 4G/5G, sẽ kiểm tra IP.');
       }
 
       const wifiConfigs = getWifiConfigs();
       let currentIP = '';
 
-      // Nếu đã cấu hình IP wifi hợp lệ => bắt buộc IP phải khớp
       if (wifiConfigs.length > 0) {
         currentIP = await getPublicIP();
         const ok = wifiConfigs.some((c) => c.ip === currentIP);
@@ -48,46 +54,91 @@ const Dashboard: React.FC<DashboardProps> = ({ onNotification }) => {
           throw new Error(`Vui lòng kết nối Wifi: ${names}. IP hiện tại (${currentIP}) không hợp lệ.`);
         }
       } else {
-        // chưa cấu hình => vẫn lấy IP nếu được để ghi log
-        try { currentIP = await getPublicIP(); } catch {}
+        try { currentIP = await getPublicIP(); } catch { }
       }
 
-      const employee = employees.find((e) => e.id === selectedEmpId);
-      if (!employee) throw new Error('Không tìm thấy nhân viên');
+      // Check Config
+      const isFaceEnabled = localStorage.getItem('ENABLE_FACE_ATTENDANCE') === 'true';
 
-      const now = Date.now();
+      if (isFaceEnabled) {
+        // Chuyển sang flow chụp ảnh
+        setPendingType(type);
+        setPendingIP(currentIP);
+        setShowCamera(true);
+        setIsProcessing(false); // Tạm dừng loading để hiện camera
+        return;
+      }
 
-      // Lưu local cho History
-      const record: AttendanceRecord = {
-        id: now.toString(),
-        employeeId: employee.id,
-        employeeName: employee.name,
-        timestamp: now,
-        type,
-        confidence: 1,
-        status: 'SUCCESS',
-        snapshot: '',
-      };
-      saveAttendanceLog(record);
+      // Flow cũ (Wifi Only)
+      await submitAttendance(type, currentIP, 'Wifi/IP Only', 1, '');
 
-      // Gửi lên sheet
-      await logAttendance({
-        employeeId: employee.id,
-        employeeName: employee.name,
-        status: type,
-        note: 'Chấm công bằng Wifi/IP (không dùng camera)',
-        ip: currentIP || '',
-      });
-
-      onNotification(
-        `Thành công! ${type === 'CHECK_IN' ? 'Vào ca' : 'Ra ca'}${currentIP ? ` (IP: ${currentIP})` : ''}`,
-        'success'
-      );
     } catch (err: any) {
       onNotification(err?.message || 'Lỗi chấm công', 'error');
-    } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleFaceCapture = async (imageSrc: string) => {
+    setShowCamera(false);
+    setIsProcessing(true);
+    setStatusMessage('Đang phân tích khuôn mặt...');
+
+    try {
+      if (!pendingType || !selectedEmpId) throw new Error('Mất trạng thái chấm công.');
+
+      const employee = employees.find(e => e.id === selectedEmpId);
+      if (!employee || !employee.avatar) {
+        throw new Error('Nhân viên chưa đăng ký khuôn mặt (hoặc không tìm thấy).');
+      }
+
+      // verify
+      const result = await verifyFace(employee.avatar, imageSrc);
+
+      if (!result.isMatch) {
+        throw new Error(`Khuôn mặt không khớp! (${result.reasoning})`);
+      }
+
+      // Success
+      await submitAttendance(pendingType, pendingIP, `Face Auth (Conf: ${result.confidence})`, result.confidence, imageSrc);
+
+    } catch (err: any) {
+      onNotification(err?.message || 'Lỗi nhận diện', 'error');
+    } finally {
+      setIsProcessing(false);
+      setPendingType(null);
+    }
+  };
+
+  const submitAttendance = async (type: 'CHECK_IN' | 'CHECK_OUT', ip: string, note: string, confidence: number, snapshot: string) => {
+    const employee = employees.find((e) => e.id === selectedEmpId);
+    if (!employee) throw new Error('Không tìm thấy nhân viên');
+
+    const now = Date.now();
+    const record: AttendanceRecord = {
+      id: now.toString(),
+      employeeId: employee.id,
+      employeeName: employee.name,
+      timestamp: now,
+      type,
+      confidence,
+      status: 'SUCCESS',
+      snapshot,
+    };
+    saveAttendanceLog(record);
+
+    await logAttendance({
+      employeeId: employee.id,
+      employeeName: employee.name,
+      status: type,
+      note: `${note}${ip ? ` - IP: ${ip}` : ''}`,
+      ip: ip,
+    });
+
+    onNotification(
+      `Thành công! ${type === 'CHECK_IN' ? 'Vào ca' : 'Ra ca'}`,
+      'success'
+    );
+    setIsProcessing(false);
   };
 
   const currentEmployee = employees.find((e) => e.id === selectedEmpId);
@@ -160,6 +211,17 @@ const Dashboard: React.FC<DashboardProps> = ({ onNotification }) => {
           <div className="w-12 h-12 border-4 border-white rounded-full animate-spin"></div>
           <p className="text-white font-medium animate-pulse">{statusMessage}</p>
         </div>
+      )}
+
+      {showCamera && (
+        <Camera
+          onCapture={handleFaceCapture}
+          onClose={() => {
+            setShowCamera(false);
+            setIsProcessing(false);
+          }}
+          instruction="Đặt khuôn mặt vào khung"
+        />
       )}
     </div>
   );

@@ -6,7 +6,7 @@ export interface AttendanceLog {
   employeeName: string;
   status: string;
   note?: string;
-  wifi_ip?: string;
+  ip?: string;
 }
 
 export interface FeedbackLog {
@@ -41,25 +41,52 @@ export async function logAttendance(log: AttendanceLog): Promise<boolean> {
   if (!API_URL) return false;
 
   try {
-    const body = toFormBody({
-      kind: "attendance",
-      employeeId: log.employeeId,
-      employeeName: log.employeeName,
-      status: log.status,
-      note: log.note || "",
-      wifi_ip: log.wifi_ip || ""
+    // 1. Thử gọi qua Proxy (Ưu tiên Production)
+    const res = await fetch('/api/log', {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "attendance",
+        employeeId: log.employeeId,
+        employeeName: log.employeeName,
+        status: log.status,
+        note: log.note || "",
+        ip: log.ip || ""
+      })
     });
 
-    const res = await fetch(API_URL, {
+    if (res.status === 404) throw new Error("Proxy 404");
+    return res.ok;
+
+  } catch (proxyErr) {
+    console.warn("⚠️ Proxy log failed, falling back to Direct Call...", proxyErr);
+    // 2. Fallback: Gọi trực tiếp Google Apps Script (cho Localhost)
+    return await logAttendanceDirect(log);
+  }
+}
+
+async function logAttendanceDirect(log: AttendanceLog): Promise<boolean> {
+  const body = toFormBody({
+    kind: "attendance",
+    employeeId: log.employeeId,
+    employeeName: log.employeeName,
+    status: log.status,
+    note: log.note || "",
+    ip: log.ip || ""
+  });
+
+  try {
+    // @ts-ignore
+    await fetch(API_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      mode: "no-cors", // Quan trọng: Bỏ qua kiểm tra CORS để đảm bảo request được gửi đi
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body
     });
-
-    // Không nhất thiết phải parse JSON để tránh lỗi CORS ở một số trình duyệt.
-    return res.ok;
-  } catch (err) {
-    console.error("logAttendance error:", err);
+    console.log("✅ Sent direct log request (Fire & Forget)");
+    return true;
+  } catch (e) {
+    console.error("Direct log failed:", e);
     return false;
   }
 }
